@@ -50,7 +50,9 @@ class ModelArgs(BaseModelArgs):
         self.n_layer = (
             self.n_layer if self.n_layer is not None else self.num_hidden_layers
         )
-        self.n_head = self.n_head if self.n_head is not None else self.num_attention_heads
+        self.n_head = (
+            self.n_head if self.n_head is not None else self.num_attention_heads
+        )
         self.n_inner = (
             self.n_inner if self.n_inner is not None else self.intermediate_size
         )
@@ -68,7 +70,9 @@ class ModelArgs(BaseModelArgs):
             )
         self.layer_norm_eps = self.layer_norm_epsilon
         if self.max_position_embeddings is None:
-            self.max_position_embeddings = self.n_positions or self.max_trained_positions
+            self.max_position_embeddings = (
+                self.n_positions or self.max_trained_positions
+            )
         if self.causal:
             raise NotImplementedError("Causal NomicBERT variants are not supported.")
 
