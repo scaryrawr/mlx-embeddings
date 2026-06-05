@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import mlx.core as mx
 import numpy as np
-from mlx.utils import tree_map
+from mlx.utils import tree_flatten, tree_map
 
 
 class TestModels(unittest.TestCase):
@@ -325,6 +325,63 @@ class TestModels(unittest.TestCase):
             text_embeds_is_sequence=False,
         )
 
+    def test_nomic_bert_model(self):
+        from mlx_embeddings.models import nomic_bert
+
+        config = nomic_bert.ModelArgs(
+            model_type="nomic_bert",
+            n_embd=16,
+            n_layer=2,
+            n_head=4,
+            n_inner=32,
+            vocab_size=64,
+            max_trained_positions=64,
+            pooling_config={"pooling_mode": "mean"},
+        )
+        model = nomic_bert.Model(config)
+        model.update(tree_map(lambda p: p.astype(mx.float32), model.parameters()))
+
+        params = dict(tree_flatten(model.parameters()))
+        self.assertIn("embeddings.token_type_embeddings.weight", params)
+        self.assertIn("encoder.layers.0.attn.Wqkv.weight", params)
+        self.assertNotIn("model.embeddings.word_embeddings.weight", params)
+
+        input_ids = mx.array([[1, 2, 3, 0, 0]], dtype=mx.int32)
+        attention_mask = mx.array([[1, 1, 1, 0, 0]], dtype=mx.int32)
+        outputs = model(input_ids, attention_mask=attention_mask)
+
+        self.assertEqual(outputs.last_hidden_state.shape, (1, 5, config.hidden_size))
+        self.assertEqual(outputs.text_embeds.shape, (1, config.hidden_size))
+        self.assertEqual(outputs.last_hidden_state.dtype, mx.float32)
+        self.assertEqual(outputs.text_embeds.dtype, mx.float32)
+        np.testing.assert_allclose(
+            mx.linalg.norm(outputs.text_embeds, axis=-1).tolist(), [1.0], rtol=1e-5
+        )
+
+    def test_nomic_bert_sanitize_keeps_top_level_keys(self):
+        from mlx_embeddings.models import nomic_bert
+
+        config = nomic_bert.ModelArgs(
+            n_embd=16,
+            n_layer=1,
+            n_head=4,
+            n_inner=32,
+            vocab_size=64,
+        )
+        model = nomic_bert.Model(config)
+        weights = {
+            "embeddings.word_embeddings.weight": mx.zeros((64, 16)),
+            "encoder.layers.0.attn.Wqkv.weight": mx.zeros((48, 16)),
+            "encoder.layers.0.attn.rotary_emb.inv_freq": mx.zeros((2,)),
+        }
+
+        sanitized = model.sanitize(weights)
+
+        self.assertIn("embeddings.word_embeddings.weight", sanitized)
+        self.assertIn("encoder.layers.0.attn.Wqkv.weight", sanitized)
+        self.assertNotIn("encoder.layers.0.attn.rotary_emb.inv_freq", sanitized)
+        self.assertFalse(any(key.startswith("model.") for key in sanitized))
+
     def test_siglip_model(self):
         from mlx_embeddings.models import siglip
 
@@ -539,6 +596,81 @@ class TestModels(unittest.TestCase):
             config.model_type,
             config.num_hidden_layers,
         )
+
+    def test_qwen2_model(self):
+        from mlx_embeddings.models import qwen2
+
+        config = qwen2.ModelArgs(
+            model_type="qwen2",
+            hidden_size=16,
+            num_hidden_layers=2,
+            intermediate_size=32,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            head_dim=4,
+            max_position_embeddings=128,
+            vocab_size=64,
+            rope_theta=1000000.0,
+        )
+        model = qwen2.Model(config)
+        model.update(tree_map(lambda p: p.astype(mx.float32), model.parameters()))
+
+        params = dict(tree_flatten(model.parameters()))
+        self.assertIn("model.layers.0.self_attn.q_proj.bias", params)
+        self.assertIn("model.layers.0.self_attn.k_proj.bias", params)
+        self.assertIn("model.layers.0.self_attn.v_proj.bias", params)
+        self.assertNotIn("model.layers.0.self_attn.o_proj.bias", params)
+
+        input_ids = mx.array([[1, 2, 3, 0, 0]], dtype=mx.int32)
+        attention_mask = mx.array([[1, 1, 1, 0, 0]], dtype=mx.int32)
+        outputs = model(input_ids, attention_mask=attention_mask)
+
+        self.assertEqual(outputs.last_hidden_state.shape, (1, 5, config.hidden_size))
+        self.assertEqual(outputs.text_embeds.shape, (1, config.hidden_size))
+        self.assertEqual(outputs.last_hidden_state.dtype, mx.float32)
+        self.assertEqual(outputs.text_embeds.dtype, mx.float32)
+        np.testing.assert_allclose(
+            mx.linalg.norm(outputs.text_embeds, axis=-1).tolist(), [1.0], rtol=1e-5
+        )
+
+        left_padded_outputs = model(
+            mx.array([[0, 0, 1, 2, 3]], dtype=mx.int32),
+            attention_mask=mx.array([[0, 0, 1, 1, 1]], dtype=mx.int32),
+        )
+        self.assertFalse(mx.any(mx.isnan(left_padded_outputs.text_embeds)).item())
+        np.testing.assert_allclose(
+            mx.linalg.norm(left_padded_outputs.text_embeds, axis=-1).tolist(),
+            [1.0],
+            rtol=1e-5,
+        )
+
+    def test_qwen2_sanitize_prefixes_bare_checkpoint_keys(self):
+        from mlx_embeddings.models import qwen2
+
+        config = qwen2.ModelArgs(
+            hidden_size=16,
+            num_hidden_layers=1,
+            intermediate_size=32,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            head_dim=4,
+            vocab_size=64,
+        )
+        model = qwen2.Model(config)
+        weights = {
+            "embed_tokens.weight": mx.zeros((64, 16)),
+            "layers.0.self_attn.q_proj.bias": mx.zeros((16,)),
+            "model.norm.weight": mx.ones((16,)),
+            "lm_head.weight": mx.zeros((64, 16)),
+        }
+
+        sanitized = model.sanitize(weights)
+
+        self.assertIn("model.embed_tokens.weight", sanitized)
+        self.assertIn("model.layers.0.self_attn.q_proj.bias", sanitized)
+        self.assertIn("model.norm.weight", sanitized)
+        self.assertNotIn("lm_head.weight", sanitized)
+        self.assertNotIn("model.lm_head.weight", sanitized)
 
     def test_qwen3_vl_model(self):
         from mlx_embeddings.models import qwen3_vl

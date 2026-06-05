@@ -36,8 +36,8 @@ class TestConfigureParser:
 
     def test_default_bits_and_group_size(self):
         args = self.parser.parse_args(["--hf-path", "test/model"])
-        assert args.q_bits == 4
-        assert args.q_group_size == 64
+        assert args.q_bits is None
+        assert args.q_group_size is None
 
     def test_all_convert_args_present(self):
         args = self.parser.parse_args(
@@ -99,7 +99,7 @@ class TestQuantizeModeDefaults:
         )
 
     def test_affine_defaults(self):
-        gs, bits, mode = self._call_defaults_for_mode("affine", 64, 4)
+        gs, bits, mode = self._call_defaults_for_mode("affine", None, None)
         assert gs == 64
         assert bits == 4
         assert mode == "affine"
@@ -140,6 +140,15 @@ class TestQuantizeModeDefaults:
         model = nn.Sequential(nn.Linear(128, 64))
         with pytest.raises(ValueError, match="Unsupported quantization mode"):
             quantize_model(model, {}, 64, 4, mode="bogus")
+
+    def test_mxfp8_rejects_wrong_bits(self):
+        import mlx.nn as nn
+
+        from mlx_embeddings.convert import quantize_model
+
+        model = nn.Sequential(nn.Linear(128, 64))
+        with pytest.raises(ValueError, match="requires q_bits=8"):
+            quantize_model(model, {}, None, 4, mode="mxfp8")
 
     def test_config_records_mode(self):
         _, _, mode = self._call_defaults_for_mode("nvfp4", 0, 0)
@@ -212,3 +221,45 @@ class TestConvertQModePassthrough:
         assert call_kwargs.kwargs.get("mode") == "mxfp4" or (
             len(call_kwargs.args) > 4 and call_kwargs.args[4] == "mxfp4"
         )
+
+    @patch.object(_convert_mod, "fetch_from_hub")
+    @patch.object(_convert_mod, "get_model_path")
+    def test_convert_does_not_overwrite_generated_weight_index(
+        self,
+        mock_get_model_path,
+        mock_fetch,
+        tmp_path,
+    ):
+        import json
+
+        import mlx.core as mx
+
+        source = tmp_path / "source"
+        source.mkdir()
+        output = tmp_path / "output"
+        (source / "config.json").write_text('{"model_type": "test"}')
+        (source / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {"old": "model-00001-of-00006.safetensors"}})
+        )
+
+        class DummyModel:
+            def parameters(self):
+                return {"w": mx.zeros((4, 4))}
+
+        class DummyTokenizer:
+            def save_pretrained(self, path):
+                pass
+
+        mock_get_model_path.return_value = source
+        mock_fetch.return_value = (
+            DummyModel(),
+            {"model_type": "test"},
+            DummyTokenizer(),
+        )
+
+        from mlx_embeddings.convert import convert
+
+        convert(hf_path="test/model", mlx_path=output)
+
+        index = json.loads((output / "model.safetensors.index.json").read_text())
+        assert index["weight_map"] == {"w": "model.safetensors"}

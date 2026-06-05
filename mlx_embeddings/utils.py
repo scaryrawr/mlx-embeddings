@@ -17,6 +17,7 @@ from mlx.utils import tree_flatten
 from mlx_vlm.utils import sanitize_weights
 from transformers import AutoProcessor, PreTrainedTokenizer
 
+from .helpers import apply_prompt_template, truncate_embeddings
 from .tokenizer_utils import TokenizerWrapper, load_tokenizer
 
 # Constants
@@ -609,6 +610,12 @@ def generate(
     """
 
     resize_shape = kwargs.get("resize_shape", None)
+    texts = apply_prompt_template(
+        texts,
+        prompt_name=kwargs.get("prompt_name", None),
+        prompt_template=kwargs.get("prompt_template", None),
+        model=model,
+    )
     inputs = prepare_inputs(
         processor, images, texts, max_length, padding, truncation, resize_shape
     )
@@ -618,5 +625,9 @@ def generate(
         outputs = model(inputs)
     else:
         outputs = model(**inputs)
+
+    matryoshka_dim = kwargs.get("matryoshka_dim", kwargs.get("truncate_dim", None))
+    if matryoshka_dim is not None and getattr(outputs, "text_embeds", None) is not None:
+        outputs.text_embeds = truncate_embeddings(outputs.text_embeds, matryoshka_dim)
 
     return outputs

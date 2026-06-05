@@ -17,6 +17,14 @@ from .utils import (
     upload_to_hub,
 )
 
+_TOKENIZER_JSON_FILES = {
+    "added_tokens.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.json",
+}
+
 
 def get_class_predicate(skip_vision: bool, q_group_size: int, weights: dict = None):
     """
@@ -50,8 +58,8 @@ def get_class_predicate(skip_vision: bool, q_group_size: int, weights: dict = No
 def quantize_model(
     model: nn.Module,
     config: dict,
-    q_group_size: int,
-    q_bits: int,
+    q_group_size: Optional[int],
+    q_bits: Optional[int],
     mode: str = "affine",
     skip_vision: bool = True,
 ) -> Tuple:
@@ -74,7 +82,9 @@ def quantize_model(
         ValueError: If an unsupported quantization mode is specified.
     """
 
-    def defaults_for_mode(mode: str, group_size: int, bits: int) -> Tuple[int, int]:
+    def defaults_for_mode(
+        mode: str, group_size: Optional[int], bits: Optional[int]
+    ) -> Tuple[int, int]:
         mode_defaults = {
             "affine": (64, 4),
             "mxfp4": (32, 4),
@@ -89,6 +99,11 @@ def quantize_model(
         default_group_size, default_bits = mode_defaults[mode]
         effective_group_size = group_size if group_size else default_group_size
         effective_bits = bits if bits else default_bits
+        if mode != "affine" and effective_bits != default_bits:
+            raise ValueError(
+                f"Quantization mode '{mode}' requires q_bits={default_bits}, "
+                f"but got {effective_bits}."
+            )
         return effective_group_size, effective_bits
 
     quantized_config = copy.deepcopy(config)
@@ -188,8 +203,8 @@ def convert(
     hf_path: str,
     mlx_path: str = "mlx_model",
     quantize: bool = False,
-    q_group_size: int = 64,
-    q_bits: int = 4,
+    q_group_size: Optional[int] = None,
+    q_bits: Optional[int] = None,
     q_mode: str = "affine",
     dtype: str = "float16",
     upload_repo: str = None,
@@ -231,6 +246,11 @@ def convert(
     for pattern in ["*.py", "*.json"]:
         files = glob.glob(str(model_path / pattern))
         for file in files:
+            filename = Path(file).name
+            if filename.endswith(".safetensors.index.json"):
+                continue
+            if filename in _TOKENIZER_JSON_FILES:
+                continue
             shutil.copy(file, mlx_path)
 
     src_pooling = model_path / "1_Pooling"
@@ -264,10 +284,10 @@ def configure_parser() -> argparse.ArgumentParser:
         "-q", "--quantize", help="Generate a quantized model.", action="store_true"
     )
     parser.add_argument(
-        "--q-group-size", help="Group size for quantization.", type=int, default=64
+        "--q-group-size", help="Group size for quantization.", type=int, default=None
     )
     parser.add_argument(
-        "--q-bits", help="Bits per weight for quantization.", type=int, default=4
+        "--q-bits", help="Bits per weight for quantization.", type=int, default=None
     )
     parser.add_argument(
         "--q-mode",

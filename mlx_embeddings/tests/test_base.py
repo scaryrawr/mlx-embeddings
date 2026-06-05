@@ -1,13 +1,15 @@
 import mlx.core as mx
 import numpy as np
+import pytest
 
+from mlx_embeddings.helpers import apply_prompt_template, truncate_embeddings
 from mlx_embeddings.models.base import (
     BaseModelArgs,
     BaseModelOutput,
     ViTModelOutput,
     normalize_embeddings,
 )
-from mlx_embeddings.tokenizer_utils import TokenizerWrapper
+from mlx_embeddings.tokenizer_utils import TokenizerWrapper, load_tokenizer
 
 
 class TestBaseModelArgs:
@@ -155,3 +157,112 @@ class TestTokenizerWrapper:
 
         assert output["args"] == (["hello", "world"],)
         assert output["kwargs"] == {"return_tensors": "mlx"}
+
+    def test_load_tokenizer_recovers_from_list_extra_special_tokens(
+        self, tmp_path, monkeypatch
+    ):
+        class DummyTokenizer:
+            def __call__(self, *args, **kwargs):
+                return {}
+
+            def decode(self, tokens):
+                return ""
+
+        calls = []
+
+        def fake_from_pretrained(path, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise AttributeError("'list' object has no attribute 'keys'")
+            return DummyTokenizer()
+
+        monkeypatch.setattr(
+            "mlx_embeddings.tokenizer_utils.AutoTokenizer.from_pretrained",
+            fake_from_pretrained,
+        )
+
+        wrapper = load_tokenizer(tmp_path)
+
+        assert isinstance(wrapper, TokenizerWrapper)
+        assert calls == [{}, {"extra_special_tokens": {}}]
+
+    def test_load_tokenizer_reraises_unrelated_attribute_errors(
+        self, tmp_path, monkeypatch
+    ):
+        def fake_from_pretrained(path, **kwargs):
+            raise AttributeError("different tokenizer failure")
+
+        monkeypatch.setattr(
+            "mlx_embeddings.tokenizer_utils.AutoTokenizer.from_pretrained",
+            fake_from_pretrained,
+        )
+
+        with pytest.raises(AttributeError, match="different tokenizer failure"):
+            load_tokenizer(tmp_path)
+
+
+class TestPromptHelpers:
+    def test_apply_named_prompt_template(self):
+        assert (
+            apply_prompt_template("Who is Laurens?", prompt_name="search_query")
+            == "search_query: Who is Laurens?"
+        )
+
+    def test_apply_prompt_template_does_not_duplicate_prefix(self):
+        text = "search_query: Who is Laurens?"
+        assert apply_prompt_template(text, prompt_name="search_query") == text
+
+    def test_query_prompt_infers_code_model(self):
+        class Config:
+            model_type = "qwen2"
+            pooling_config = {"pooling_mode": "lasttoken"}
+
+        class Model:
+            config = Config()
+
+        assert (
+            apply_prompt_template(
+                "Calculate factorial", prompt_name="query", model=Model()
+            )
+            == "Represent this query for searching relevant code: Calculate factorial"
+        )
+
+    def test_query_prompt_infers_legacy_cls_pooling_as_code_model(self):
+        class Config:
+            model_type = "nomic_bert"
+            pooling_config = {
+                "pooling_mode_cls_token": True,
+                "pooling_mode_mean_tokens": False,
+                "pooling_mode_max_tokens": False,
+                "pooling_mode_mean_sqrt_len_tokens": False,
+                "pooling_mode_weightedmean_tokens": False,
+                "pooling_mode_lasttoken": False,
+            }
+
+        class Model:
+            config = Config()
+
+        assert (
+            apply_prompt_template("Find factorial", prompt_name="query", model=Model())
+            == "Represent this query for searching relevant code: Find factorial"
+        )
+
+    def test_document_prompt_infers_text_model(self):
+        class Config:
+            model_type = "nomic_bert"
+            pooling_config = {"pooling_mode": "mean"}
+
+        class Model:
+            config = Config()
+
+        assert apply_prompt_template(
+            ["A document"], prompt_name="document", model=Model()
+        ) == ["search_document: A document"]
+
+    def test_truncate_embeddings_renormalizes(self):
+        embeddings = mx.array([[3.0, 4.0, 12.0], [1.0, 2.0, 2.0]])
+        truncated = truncate_embeddings(embeddings, 2)
+
+        assert truncated.shape == (2, 2)
+        norms = mx.linalg.norm(truncated, ord=2, axis=-1)
+        np.testing.assert_allclose(norms.tolist(), [1.0, 1.0], rtol=1e-5)
