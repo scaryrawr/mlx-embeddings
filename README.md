@@ -17,6 +17,7 @@ MLX-Embeddings supports a variety of model architectures for text embedding task
 - XLM-RoBERTa (Cross-lingual Language Model - Robustly Optimized BERT Approach)
 - BERT (Bidirectional Encoder Representations from Transformers)
 - ModernBERT (modernized bidirectional encoder-only Transformer model)
+- NomicBERT (Nomic text/code embedding models such as nomic-embed-text-v1.5 and CodeRankEmbed)
 - Qwen3 (Qwen3's embedding model)
 - Qwen3-VL (multimodal Qwen3-VL embedding and reranking model)
 - Llama Bidirectional (Llama-based bidirectional embedding models, e.g. NVIDIA NV-Embed)
@@ -128,6 +129,40 @@ text_embeds = outputs.text_embeds # mean pooled and normalized embeddings
 ```
 
 Note : text-embeds use mean pooling for bert and xlm-robert. For modernbert, pooling strategy is set through the config file, defaulting to mean
+
+#### Nomic Embedding Models
+
+Nomic text and code embedding checkpoints can be loaded directly when converted
+or available in MLX format. Pooling is read from the model's
+`1_Pooling/config.json` when present.
+
+```python
+import mlx.core as mx
+from mlx_embeddings import generate, load
+
+model, tokenizer = load("nomic-ai/nomic-embed-text-v1.5")
+
+query = generate(
+    model,
+    tokenizer,
+    texts=["Who is Laurens van Der Maaten?"],
+    prompt_name="search_query",
+)
+document = generate(
+    model,
+    tokenizer,
+    texts=["TSNE is a dimensionality reduction algorithm."],
+    prompt_name="search_document",
+    matryoshka_dim=256,
+)
+
+similarity = mx.matmul(query.text_embeds, document.text_embeds.T)
+```
+
+For code retrieval models, use `prompt_name="code_query"` or
+`prompt_name="query"` for natural-language code search queries. Code snippets
+can be embedded without a prompt, or with `prompt_name="code_document"` for an
+explicit no-op document helper.
 
 #### Masked Language Modeling
 
