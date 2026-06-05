@@ -1,5 +1,6 @@
 import mlx.core as mx
 import numpy as np
+import pytest
 
 from mlx_embeddings.models.base import (
     BaseModelArgs,
@@ -7,7 +8,7 @@ from mlx_embeddings.models.base import (
     ViTModelOutput,
     normalize_embeddings,
 )
-from mlx_embeddings.tokenizer_utils import TokenizerWrapper
+from mlx_embeddings.tokenizer_utils import TokenizerWrapper, load_tokenizer
 
 
 class TestBaseModelArgs:
@@ -155,3 +156,45 @@ class TestTokenizerWrapper:
 
         assert output["args"] == (["hello", "world"],)
         assert output["kwargs"] == {"return_tensors": "mlx"}
+
+    def test_load_tokenizer_recovers_from_list_extra_special_tokens(
+        self, tmp_path, monkeypatch
+    ):
+        class DummyTokenizer:
+            def __call__(self, *args, **kwargs):
+                return {}
+
+            def decode(self, tokens):
+                return ""
+
+        calls = []
+
+        def fake_from_pretrained(path, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise AttributeError("'list' object has no attribute 'keys'")
+            return DummyTokenizer()
+
+        monkeypatch.setattr(
+            "mlx_embeddings.tokenizer_utils.AutoTokenizer.from_pretrained",
+            fake_from_pretrained,
+        )
+
+        wrapper = load_tokenizer(tmp_path)
+
+        assert isinstance(wrapper, TokenizerWrapper)
+        assert calls == [{}, {"extra_special_tokens": {}}]
+
+    def test_load_tokenizer_reraises_unrelated_attribute_errors(
+        self, tmp_path, monkeypatch
+    ):
+        def fake_from_pretrained(path, **kwargs):
+            raise AttributeError("different tokenizer failure")
+
+        monkeypatch.setattr(
+            "mlx_embeddings.tokenizer_utils.AutoTokenizer.from_pretrained",
+            fake_from_pretrained,
+        )
+
+        with pytest.raises(AttributeError, match="different tokenizer failure"):
+            load_tokenizer(tmp_path)

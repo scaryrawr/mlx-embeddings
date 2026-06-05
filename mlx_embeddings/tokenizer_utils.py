@@ -337,7 +337,15 @@ def load_tokenizer(model_path, tokenizer_config_extra={}):
             elif _is_bpe_decoder(tokenizer_content["decoder"]):
                 detokenizer_class = BPEStreamingDetokenizer
 
-    return TokenizerWrapper(
-        AutoTokenizer.from_pretrained(model_path, **tokenizer_config_extra),
-        detokenizer_class,
-    )
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_path, **tokenizer_config_extra)
+    except AttributeError as error:
+        if "'list' object has no attribute 'keys'" not in str(error):
+            raise
+        tokenizer_config_extra = {
+            **tokenizer_config_extra,
+            "extra_special_tokens": {},
+        }
+        tokenizer = AutoTokenizer.from_pretrained(model_path, **tokenizer_config_extra)
+
+    return TokenizerWrapper(tokenizer, detokenizer_class)
