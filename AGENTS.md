@@ -4,6 +4,7 @@
 `mlx_embeddings/` is the Python package. Public imports come from `mlx_embeddings/__init__.py`, with `utils.py` owning `load()`/`generate()` and Hugging Face download/loading helpers. Model dispatch is driven by `config["model_type"]` (hyphens remapped to underscores) into `mlx_embeddings/models/<model_type>.py`; new architectures should expose `Model` and `ModelArgs` like the existing modules. Multimodal-specific code lives under `mlx_embeddings/models/qwen3_vl/` and `mlx_embeddings/models/llama_nemotron_vl/`. Conversion and quantization CLI logic is in `mlx_embeddings/convert.py`. Tests live in `mlx_embeddings/tests/`.
 
 ## Build, Test, and Development Commands
+- `uv run pytest mlx_embeddings/tests -q` — preferred when `uv` is available; it uses the checked-in `uv.lock` environment and avoids relying on a system `python` executable.
 - `python -m pip install -e ".[dev]"` — editable install with pytest helpers; this project requires Python >=3.10 and MLX/Metal, so develop on macOS/Apple Silicon.
 - `python -m pip install pre-commit && pre-commit run --all` — matches CI style checks (Black and isort only).
 - `python -m pytest mlx_embeddings/tests -q` — run the normal unit suite from the repo root; `pyproject.toml` excludes the smoke script.
