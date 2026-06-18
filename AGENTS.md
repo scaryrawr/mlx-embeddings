@@ -6,7 +6,7 @@
 ## Build, Test, and Development Commands
 - `uv run pytest mlx_embeddings/tests -q` — preferred when `uv` is available; it uses the checked-in `uv.lock` environment and avoids relying on a system `python` executable.
 - `python -m pip install -e ".[dev]"` — editable install with pytest helpers; this project requires Python >=3.10 and MLX/Metal, so develop on macOS/Apple Silicon.
-- `python -m pip install pre-commit && pre-commit run --all` — matches CI style checks (Black and isort only).
+- `uvx pre-commit run --all-files` — matches CI style checks (Black and isort only) without requiring `pre-commit` in the project environment; use an installed `pre-commit` binary if one is already available.
 - `python -m pytest mlx_embeddings/tests -q` — run the normal unit suite from the repo root; `pyproject.toml` excludes the smoke script.
 - `python -m pytest mlx_embeddings/tests/test_pooling.py -q` — fast narrow validation for pooling changes.
 - `python -m build` — build release artifacts, matching the publish workflow.
