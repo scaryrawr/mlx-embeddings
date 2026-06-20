@@ -1,3 +1,5 @@
+import json
+
 import mlx.core as mx
 import numpy as np
 import pytest
@@ -10,6 +12,7 @@ from mlx_embeddings.models.base import (
     normalize_embeddings,
 )
 from mlx_embeddings.tokenizer_utils import TokenizerWrapper, load_tokenizer
+from mlx_embeddings.utils import _enrich_config_from_model_path
 
 
 class TestBaseModelArgs:
@@ -259,6 +262,38 @@ class TestPromptHelpers:
             ["A document"], prompt_name="document", model=Model()
         ) == ["search_document: A document"]
 
+    def test_prompt_name_uses_model_prompts_before_heuristics(self):
+        class Config:
+            model_type = "lfm2"
+            pooling_config = {"pooling_mode_cls_token": True}
+            prompts = {"query": "query: ", "document": "document: "}
+
+        class Model:
+            config = Config()
+
+        assert (
+            apply_prompt_template("Where is Paris?", prompt_name="query", model=Model())
+            == "query: Where is Paris?"
+        )
+        assert (
+            apply_prompt_template(
+                "Paris is in France.", prompt_name="document", model=Model()
+            )
+            == "document: Paris is in France."
+        )
+
+    def test_empty_model_prompt_leaves_text_unchanged(self):
+        class Config:
+            prompts = {"query": ""}
+
+        class Model:
+            config = Config()
+
+        assert (
+            apply_prompt_template("hello", prompt_name="query", model=Model())
+            == "hello"
+        )
+
     def test_truncate_embeddings_renormalizes(self):
         embeddings = mx.array([[3.0, 4.0, 12.0], [1.0, 2.0, 2.0]])
         truncated = truncate_embeddings(embeddings, 2)
@@ -266,3 +301,50 @@ class TestPromptHelpers:
         assert truncated.shape == (2, 2)
         norms = mx.linalg.norm(truncated, ord=2, axis=-1)
         np.testing.assert_allclose(norms.tolist(), [1.0, 1.0], rtol=1e-5)
+
+
+class TestConfigEnrichment:
+    def test_reads_sentence_transformers_sidecars(self, tmp_path):
+        dense_dir = tmp_path / "1_Dense"
+        dense_dir.mkdir()
+        (dense_dir / "config.json").write_text(
+            json.dumps({"in_features": 16, "out_features": 8, "bias": False})
+        )
+
+        pooling_dir = tmp_path / "1_Pooling"
+        pooling_dir.mkdir()
+        (pooling_dir / "config.json").write_text(
+            json.dumps({"pooling_mode_cls_token": True})
+        )
+
+        (tmp_path / "config_sentence_transformers.json").write_text(
+            json.dumps(
+                {
+                    "prompts": {"query": "query: "},
+                    "query_prefix": "[Q] ",
+                    "document_prefix": "[D] ",
+                }
+            )
+        )
+
+        config = _enrich_config_from_model_path({"model_type": "lfm2"}, tmp_path)
+
+        assert config["dense_config"]["out_features"] == 8
+        assert config["out_features"] == 8
+        assert config["pooling_config"]["pooling_mode_cls_token"] is True
+        assert config["prompts"] == {"query": "query: ", "document": "[D] "}
+
+    def test_pylate_prefixes_fill_empty_prompts(self, tmp_path):
+        (tmp_path / "config_sentence_transformers.json").write_text(
+            json.dumps(
+                {
+                    "prompts": {"query": "", "document": ""},
+                    "query_prefix": "[Q] ",
+                    "document_prefix": "[D] ",
+                }
+            )
+        )
+
+        config = _enrich_config_from_model_path({"model_type": "lfm2"}, tmp_path)
+
+        assert config["prompts"] == {"query": "[Q] ", "document": "[D] "}

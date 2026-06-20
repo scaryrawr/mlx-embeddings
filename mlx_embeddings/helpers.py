@@ -32,21 +32,38 @@ def _is_code_model(model) -> bool:
     )
 
 
-def _resolve_prompt_name(prompt_name: Optional[str], model=None) -> Optional[str]:
+def _template_from_prefix(prefix: str) -> str:
+    return prefix if "{text}" in prefix else f"{prefix}{{text}}"
+
+
+def _model_prompts(model) -> Dict[str, str]:
+    if model is None or not hasattr(model, "config"):
+        return {}
+    prompts = getattr(model.config, "prompts", {})
+    return prompts if isinstance(prompts, dict) else {}
+
+
+def _resolve_prompt_template(prompt_name: Optional[str], model=None) -> Optional[str]:
     if prompt_name is None:
         return None
     normalized = prompt_name.lower()
     if normalized in ("none", "raw"):
         return None
+    model_prompts = _model_prompts(model)
+    if normalized in model_prompts:
+        return _template_from_prefix(model_prompts[normalized])
     if normalized in PROMPT_TEMPLATES:
-        return normalized
+        return PROMPT_TEMPLATES[normalized]
     if normalized == "query":
-        return "code_query" if _is_code_model(model) else "search_query"
+        resolved = "code_query" if _is_code_model(model) else "search_query"
+        return PROMPT_TEMPLATES[resolved]
     if normalized in ("document", "doc"):
-        return "code_document" if _is_code_model(model) else "search_document"
+        resolved = "code_document" if _is_code_model(model) else "search_document"
+        return PROMPT_TEMPLATES[resolved]
     raise ValueError(
         f"Unknown prompt_name {prompt_name!r}. "
-        f"Supported names: {sorted(PROMPT_TEMPLATES)} plus 'query' and 'document'."
+        f"Supported names: {sorted(PROMPT_TEMPLATES)} plus 'query', 'document', "
+        "and names from the loaded model prompts."
     )
 
 
@@ -58,12 +75,10 @@ def apply_prompt_template(
     model=None,
 ) -> PromptInput:
     """Apply an opt-in prompt template to a string or list of strings."""
-
     if prompt_template is None:
-        resolved_name = _resolve_prompt_name(prompt_name, model=model)
-        if resolved_name is None:
+        prompt_template = _resolve_prompt_template(prompt_name, model=model)
+        if prompt_template is None:
             return texts
-        prompt_template = PROMPT_TEMPLATES[resolved_name]
     elif "{text}" not in prompt_template:
         raise ValueError("prompt_template must include a '{text}' placeholder.")
 

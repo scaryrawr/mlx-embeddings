@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 """Tests for `mlx_embeddings` package."""
+
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -278,6 +279,103 @@ class TestModels(unittest.TestCase):
             text_embeds_is_sequence=True,
             last_hidden_state_is_sequence=True,
         )
+
+    def _tiny_lfm2_config(self, **extra):
+        from mlx_embeddings.models import lfm2
+
+        config = {
+            "model_type": "lfm2",
+            "hidden_size": 16,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "max_position_embeddings": 128,
+            "vocab_size": 64,
+            "norm_eps": 1e-05,
+            "layer_types": ["conv", "full_attention"],
+            "conv_bias": False,
+            "conv_L_cache": 3,
+            "block_dim": 16,
+            "block_ff_dim": 32,
+            "block_multiple_of": 8,
+            "block_ffn_dim_multiplier": 1.0,
+            "block_auto_adjust_ff_dim": False,
+            "rope_theta": 1000.0,
+            "architectures": ["Lfm2BidirectionalModel"],
+        }
+        config.update(extra)
+        return lfm2.ModelArgs.from_dict(config)
+
+    def test_lfm2_bidirectional_embedding_model(self):
+        from mlx_embeddings.models import lfm2
+
+        config = self._tiny_lfm2_config(
+            pooling_config={
+                "pooling_mode_cls_token": True,
+                "pooling_mode_mean_tokens": False,
+                "pooling_mode_max_tokens": False,
+                "pooling_mode_mean_sqrt_len_tokens": False,
+                "pooling_mode_weightedmean_tokens": False,
+                "pooling_mode_lasttoken": False,
+                "include_prompt": True,
+            },
+            prompts={"query": "query: ", "document": "document: "},
+        )
+        model = lfm2.Model(config)
+        model.update(tree_map(lambda p: p.astype(mx.float32), model.parameters()))
+
+        outputs = model(
+            mx.array([[1, 2, 3, 0]], dtype=mx.int32),
+            attention_mask=mx.array([[1, 1, 1, 0]], dtype=mx.int32),
+        )
+
+        self.assertEqual(outputs.last_hidden_state.shape, (1, 4, config.hidden_size))
+        self.assertEqual(outputs.text_embeds.shape, (1, config.hidden_size))
+        self.assertEqual(outputs.pooler_output.shape, (1, config.hidden_size))
+        np.testing.assert_allclose(
+            mx.linalg.norm(outputs.text_embeds, axis=-1).tolist(), [1.0], rtol=1e-5
+        )
+
+        keyword_outputs = model(
+            input_ids=mx.array([[1, 2, 3, 0]], dtype=mx.int32),
+            attention_mask=mx.array([[1, 1, 1, 0]], dtype=mx.int32),
+        )
+        self.assertEqual(keyword_outputs.text_embeds.shape, (1, config.hidden_size))
+
+    def test_lfm2_bidirectional_colbert_model(self):
+        from mlx_embeddings.models import lfm2
+
+        config = self._tiny_lfm2_config(
+            dense_config={"in_features": 16, "out_features": 8, "bias": False},
+        )
+        model = lfm2.Model(config)
+        model.update(tree_map(lambda p: p.astype(mx.float32), model.parameters()))
+
+        outputs = model(
+            mx.array([[1, 2, 3, 0]], dtype=mx.int32),
+            attention_mask=mx.array([[1, 1, 1, 0]], dtype=mx.int32),
+        )
+
+        self.assertEqual(outputs.last_hidden_state.shape, (1, 4, config.hidden_size))
+        self.assertEqual(outputs.text_embeds.shape, (1, 4, config.out_features))
+        np.testing.assert_allclose(outputs.text_embeds[:, -1, :].tolist(), [[0.0] * 8])
+
+    def test_lfm2_sanitize_maps_sentence_transformers_dense(self):
+        from mlx_embeddings.models import lfm2
+
+        config = self._tiny_lfm2_config(
+            dense_config={"in_features": 16, "out_features": 8, "bias": False},
+        )
+        model = lfm2.Model(config)
+        weights = {
+            "embed_tokens.weight": mx.zeros((64, 16)),
+            "1_Dense.linear.weight": mx.zeros((8, 16)),
+        }
+
+        sanitized = model.sanitize(weights)
+
+        self.assertIn("model.embed_tokens.weight", sanitized)
+        self.assertIn("dense.0.weight", sanitized)
 
     def test_modernbert_model_mask_token(self):
         from mlx_embeddings.models import modernbert

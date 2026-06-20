@@ -82,7 +82,9 @@ def get_model_path(path_or_hf_repo: str, revision: Optional[str] = None) -> Path
                     revision=revision,
                     allow_patterns=[
                         "*.json",
+                        "**/*.json",
                         "*.safetensors",
+                        "**/*.safetensors",
                         "*.py",
                         "*.tiktoken",
                         "*.txt",
@@ -120,6 +122,55 @@ def _read_pooling_config(model_path: Path) -> Optional[dict]:
         return json.load(f)
 
 
+def _read_dense_config(model_path: Path) -> Optional[dict]:
+    """Return the parsed ``1_Dense/config.json``, or None if absent."""
+    dense_cfg_path = model_path / "1_Dense" / "config.json"
+    if not dense_cfg_path.exists():
+        return None
+    with open(dense_cfg_path, "r") as f:
+        return json.load(f)
+
+
+def _read_sentence_transformers_config(model_path: Path) -> Optional[dict]:
+    """Return SentenceTransformers metadata, or None if absent."""
+    st_cfg_path = model_path / "config_sentence_transformers.json"
+    if not st_cfg_path.exists():
+        return None
+    with open(st_cfg_path, "r") as f:
+        return json.load(f)
+
+
+def _enrich_config_from_model_path(config: dict, model_path: Path) -> dict:
+    """Merge supported SentenceTransformers sidecar metadata into ``config``."""
+    if "pooling_config" not in config:
+        pooling_cfg = _read_pooling_config(model_path)
+        if pooling_cfg is not None:
+            config["pooling_config"] = pooling_cfg
+
+    if "dense_config" not in config:
+        dense_cfg = _read_dense_config(model_path)
+        if dense_cfg is not None:
+            config["dense_config"] = dense_cfg
+            if config.get("out_features") is None and "out_features" in dense_cfg:
+                config["out_features"] = dense_cfg["out_features"]
+
+    st_cfg = _read_sentence_transformers_config(model_path)
+    if st_cfg is not None:
+        if "prompts" not in config and "prompts" in st_cfg:
+            config["prompts"] = st_cfg["prompts"]
+        if "query_prefix" in st_cfg or "document_prefix" in st_cfg:
+            prompts = dict(config.get("prompts", {}))
+            if "query_prefix" in st_cfg and not prompts.get("query"):
+                prompts["query"] = st_cfg["query_prefix"]
+            if "document_prefix" in st_cfg and not prompts.get("document"):
+                prompts["document"] = st_cfg["document_prefix"]
+            config["prompts"] = prompts
+        if "default_prompt_name" not in config and "default_prompt_name" in st_cfg:
+            config["default_prompt_name"] = st_cfg["default_prompt_name"]
+
+    return config
+
+
 def load_model(
     model_path: Path,
     lazy: bool = False,
@@ -152,10 +203,7 @@ def load_model(
     config = load_config(model_path)
     config.update(model_config)
 
-    if "pooling_config" not in config:
-        pooling_cfg = _read_pooling_config(model_path)
-        if pooling_cfg is not None:
-            config["pooling_config"] = pooling_cfg
+    config = _enrich_config_from_model_path(config, model_path)
 
     weight_files = glob.glob(str(model_path / "**/model*.safetensors"), recursive=True)
 
@@ -344,7 +392,7 @@ def fetch_from_hub(
     model_path: Path, lazy: bool = False, **kwargs
 ) -> Tuple[nn.Module, dict, PreTrainedTokenizer]:
     model = load_model(model_path, lazy, **kwargs)
-    config = load_config(model_path)
+    config = _enrich_config_from_model_path(load_config(model_path), model_path)
     tokenizer = load_tokenizer(model_path)
     return model, config, tokenizer
 
